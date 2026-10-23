@@ -7,7 +7,8 @@ environment) without keeping a trame server process alive.
 
 The scene is serialized with the same vtk.js offline format used by
 ``plotter.trame.export_vtksz`` and rendered entirely in the browser by
-the vendored viewer bundle (``trame_pyvista/static/viewer.js``).
+the vendored viewer bundle (``trame_pyvista/static/viewer.js``, generated
+from trame-vtk by ``scripts/refresh_viewer.py``).
 
 Example
 -------
