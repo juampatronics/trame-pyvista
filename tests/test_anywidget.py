@@ -115,6 +115,20 @@ def test_esm_is_self_contained():
     assert 'setTimeout(()=>{ra&&(window?.loadDataSet?.(),ra&&q0())},100)' not in esm
 
 
+@pytest.mark.parametrize(
+    'html',
+    [
+        '<html></html>',
+        '<script type="module">var a=1;</script>',
+        '<script type="module">window.OfflineLocalView={load(){}</script>',
+    ],
+)
+def test_extract_viewer_rejects_unexpected_html(html: str):
+    """A changed trame-vtk viewer page raises instead of shipping a broken bundle."""
+    with pytest.raises(RuntimeError, match='OfflineLocalView'):
+        aw._extract_viewer(html)
+
+
 @pytest.mark.needs_playwright
 def test_anywidget_widget_renders_in_browser(tmp_path: Path) -> None:
     """Render the anywidget widget in Chromium and confirm the canvas is interactive.

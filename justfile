@@ -20,10 +20,6 @@ test-playwright *args:
     uv run playwright install --with-deps chromium
     uv run pytest tests/ --playwright -m needs_playwright --cov {{ args }}
 
-# Regenerate the vendored viewer.js from the installed trame-vtk
-refresh-viewer:
-    uv run python scripts/refresh_viewer.py
-
 # Type check
 typecheck:
     uv run mypy trame_pyvista

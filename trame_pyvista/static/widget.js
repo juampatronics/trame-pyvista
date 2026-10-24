@@ -2,9 +2,9 @@
 //
 // Renders a base64-encoded trame/vtk.js scene snapshot (produced by
 // ``plotter.trame.export_vtksz``) inside the widget element using the
-// vendored OfflineLocalView bundle (``./viewer.js``). The Python side
-// concatenates that bundle onto this file, so this module is self
-// contained and needs no network access or running server.
+// OfflineLocalView bundle from trame-vtk. The Python side concatenates
+// that bundle onto this file, so this module is self contained and
+// needs no network access or running server.
 
 const trame_pyvista_widget = (() => {
   const defaultHeight = 450;

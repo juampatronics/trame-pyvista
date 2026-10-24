@@ -32,10 +32,6 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy trame_pyvista
-      - name: Check viewer.js is in sync with trame-vtk
-        run: |
-          uv run python scripts/refresh_viewer.py
-          git diff --exit-code -- trame_pyvista/static/viewer.js
 
   test:
     runs-on: ubuntu-latest

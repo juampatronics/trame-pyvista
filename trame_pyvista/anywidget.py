@@ -7,8 +7,7 @@ environment) without keeping a trame server process alive.
 
 The scene is serialized with the same vtk.js offline format used by
 ``plotter.trame.export_vtksz`` and rendered entirely in the browser by
-the vendored viewer bundle (``trame_pyvista/static/viewer.js``, generated
-from trame-vtk by ``scripts/refresh_viewer.py``).
+the ``OfflineLocalView`` bundle that ships with trame-vtk.
 
 Example
 -------
@@ -34,10 +33,12 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING
 
 from anywidget import AnyWidget
 import traitlets.traitlets as _t
+from trame_vtk.tools.vtksz2html import HTML_VIEWER_PATH
 
 if TYPE_CHECKING:
     from pyvista.plotting.plotter import BasePlotter
@@ -51,15 +52,52 @@ __all__ = [
 _STATIC_DIR = Path(__file__).resolve().parent / 'static'
 
 
+_API_ANCHOR = 'window.OfflineLocalView='
+
+# The bundle expects a ``global`` object, as trame-vtk's first inline script provides.
+_GLOBAL_INIT = """if (typeof globalThis !== "undefined") {
+  globalThis.global = globalThis.global || {};
+}"""
+
+
+def _api_end(script: str, start: int) -> int:
+    """Return the index just past the ``window.OfflineLocalView={...};`` statement."""
+    depth = 0
+    for i in range(script.index('{', start), len(script)):
+        if script[i] == '{':
+            depth += 1
+        elif script[i] == '}':
+            depth -= 1
+            if depth == 0:
+                return i + 2 if script[i + 1 : i + 2] == ';' else i + 1
+    msg = f'Could not brace-match `{_API_ANCHOR}` in {HTML_VIEWER_PATH}.'
+    raise RuntimeError(msg)
+
+
+def _extract_viewer(html: str) -> str:
+    """Return trame-vtk's ``OfflineLocalView`` bundle without its standalone auto boot."""
+    match = re.search(r'<script type="module">(.*?)</script>', html, re.DOTALL)
+    if match is None or _API_ANCHOR not in match.group(1):
+        msg = f'No `{_API_ANCHOR}` module script in {HTML_VIEWER_PATH}.'
+        raise RuntimeError(msg)
+    script = match.group(1)
+    start = script.index(_API_ANCHOR)
+    library = script[:start]
+    boot = library.rfind('setTimeout(')
+    if boot != -1:
+        library = library[:boot]
+    return f'{_GLOBAL_INIT}\n{library}{script[start : _api_end(script, start)]}\n'
+
+
 def _build_esm() -> str:
-    """Concatenate the widget module with the vendored viewer bundle.
+    """Concatenate the widget module with the trame-vtk viewer bundle.
 
     anywidget evaluates the ``_esm`` string as a single ES module, so
-    relative imports would not resolve; both files must therefore form
+    relative imports would not resolve; both parts must therefore form
     one self-contained module.
     """
     widget = (_STATIC_DIR / 'widget.js').read_text(encoding='utf-8')
-    viewer = (_STATIC_DIR / 'viewer.js').read_text(encoding='utf-8')
+    viewer = _extract_viewer(Path(HTML_VIEWER_PATH).read_text(encoding='utf-8'))
     return f'{widget}\n{viewer}'
 
 
