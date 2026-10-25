@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import importlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 
+import comm
 from IPython.display import IFrame
 import numpy as np
 import pytest
@@ -32,6 +35,7 @@ from trame_pyvista.ui.vuetify3 import divider as vue3_divider
 from trame_pyvista.ui.vuetify3 import select as vue3_select
 from trame_pyvista.ui.vuetify3 import slider as vue3_slider
 from trame_pyvista.ui.vuetify3 import text_field as vue3_text_field
+from trame_pyvista.widgets import HAS_VTK_94
 from trame_pyvista.widgets import PyVistaLocalView
 from trame_pyvista.widgets import PyVistaRemoteLocalView
 from trame_pyvista.widgets import PyVistaRemoteView
@@ -96,6 +100,115 @@ def test_launch_server_with_jupyter_kernel_argv():
         env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_launch_server_off_main_thread():
+    # marimo run executes app cells in worker threads, where signal handlers cannot be installed.
+    code = (
+        'import threading\n'
+        'from trame.app import get_server\n'
+        'from trame_pyvista.jupyter import elegantly_launch\n'
+        'ok = []\n'
+        'def run():\n'
+        "    elegantly_launch('off-main')\n"
+        "    ok.append(get_server(name='off-main').running)\n"
+        'thread = threading.Thread(target=run)\n'
+        'thread.start()\n'
+        'thread.join(60)\n'
+        'assert ok == [True], ok\n'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_launch_server_keeps_signal_handlers():
+    code = (
+        'import signal\n'
+        'from trame_pyvista.jupyter import elegantly_launch\n'
+        'before = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM)}\n'
+        "elegantly_launch('keep-signals')\n"
+        'assert {sig: signal.getsignal(sig) for sig in before} == before\n'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_import_without_rca_or_vtklocal():
+    """Importing the package loads neither trame-rca nor trame-vtklocal, both fail on VTK < 9.4."""
+    code = (
+        'import sys\n'
+        "sys.modules['trame_rca.rca'] = None\n"
+        "sys.modules['trame_vtklocal.module'] = None\n"
+        'import trame_pyvista, trame.widgets.pyvista, trame_pyvista.apps\n'
+        "assert 'trame.widgets.rca' not in sys.modules\n"
+        "assert 'trame.widgets.vtklocal' not in sys.modules\n"
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ('name', 'module'),
+    [('PyVistaRCAView', 'rca_view'), ('PyVistaWasmView', 'wasm_view')],
+)
+@pytest.mark.skipif(not HAS_VTK_94, reason='trame-rca and trame-vtklocal need VTK >= 9.4')
+def test_lazy_view_attribute(name, module):
+    """The VTK >= 9.4 views resolve lazily from both public modules."""
+    from trame.widgets import pyvista as trame_pyvista_widgets
+
+    from trame_pyvista import widgets
+
+    view_cls = getattr(importlib.import_module(f'trame_pyvista.{module}'), name)
+    assert getattr(widgets, name) is view_cls
+    assert getattr(trame_pyvista_widgets, name) is view_cls
+    assert name in dir(widgets)
+    assert name in trame_pyvista_widgets.__all__
+
+
+@pytest.mark.parametrize(
+    ('name', 'match'),
+    [('PyVistaRCAView', 'needs VTK >= 9.4'), ('PyVistaWasmView', 'is too old')],
+)
+@pytest.mark.skipif(HAS_VTK_94, reason='checks the error raised below VTK 9.4')
+def test_lazy_view_old_vtk(name, match):
+    """The VTK >= 9.4 views raise a version error on older VTK."""
+    from trame.widgets import pyvista as trame_pyvista_widgets
+
+    from trame_pyvista import widgets
+
+    with pytest.raises(pv.VTKVersionError, match=match):
+        getattr(widgets, name)
+    with pytest.raises(pv.VTKVersionError, match=match):
+        getattr(trame_pyvista_widgets, name)
+    assert name not in trame_pyvista_widgets.__all__
+    exec('from trame.widgets.pyvista import *', {})  # noqa: S102
+
+
+@pytest.mark.parametrize('module', ['trame_pyvista.widgets', 'trame.widgets.pyvista'])
+def test_lazy_view_missing_attribute(module):
+    with pytest.raises(AttributeError, match=f"module '{module}' has no attribute 'missing'"):
+        _ = importlib.import_module(module).missing
 
 
 def test_export_html_embeds_viewer_and_scene():
@@ -474,6 +587,60 @@ def test_embeddable_widget():
     assert isinstance(widget, EmbeddableWidget)
 
 
+def _show_html(**kwargs):
+    """Return the html backend widget of a sphere plot."""
+    pl = pv.Plotter(notebook=True)
+    pl.add_mesh(pv.Sphere())
+    return pl.show(jupyter_backend='html', return_viewer=True, jupyter_kwargs=kwargs)
+
+
+def test_embeddable_widgets_share_viewer_page():
+    first, second = _show_html(), _show_html()
+    page = first._viewer_page
+    assert page is second._viewer_page
+    assert page.html == Path(HTML_VIEWER_PATH).read_text(encoding='utf-8')
+    assert base64.b64decode(first.scene)[:2] == b'PK'
+    assert first.get_state()['_viewer_page'] == f'IPY_MODEL_{page.model_id}'
+
+
+@pytest.mark.parametrize('close', ['widget', 'comm'])
+def test_embeddable_widget_replaces_closed_viewer_page(close):
+    old = _show_html()._viewer_page
+    if close == 'widget':
+        old.close()
+    else:
+        msg = {'content': {'comm_id': old.comm.comm_id, 'data': {}}}
+        comm.get_comm_manager().comm_close(None, None, msg)
+    first, second = _show_html(), _show_html()
+    assert first._viewer_page is not old
+    assert first._viewer_page is second._viewer_page
+
+
+def test_embeddable_widget_value():
+    pl = pv.Plotter(notebook=True)
+    pl.add_mesh(pv.Sphere())
+    widget = pl.show(jupyter_backend='html', return_viewer=True)
+    src = pl.trame.export_html(filename=None).getvalue()
+    exported_scene = src.split('const base64Str = "')[1].split('"')[0]
+    src = src.replace(exported_scene, widget.scene)
+    src = src.replace('&', '&amp;').replace('"', '&quot;')
+    border = 'border: 1px solid rgb(221,221,221);'
+    assert widget.value == (
+        f'<iframe srcdoc="{src}" class="pyvista" style="width: 100%; height: 600px; {border}">'
+        '</iframe>'
+    )
+
+
+def test_embeddable_widget_ignores_html_kwargs():
+    with pytest.warns(
+        UserWarning, match=r'Ignoring `style`, `description`, `description_tooltip`'
+    ):
+        widget = _show_html(
+            style={'background': 'red'}, description='sphere', description_tooltip='a'
+        )
+    assert isinstance(widget, EmbeddableWidget)
+
+
 def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
     from trame_pyvista import jupyter
 
@@ -481,7 +648,12 @@ def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
         jupyter.Widget(viewer=None, src=None)
 
-    with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
+
+def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):
+    from trame_pyvista import jupyter
+
+    monkeypatch.setattr(jupyter, 'AnyWidget', object)
+    with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
         jupyter.EmbeddableWidget(plotter=None, width=None, height=None)
 
 
