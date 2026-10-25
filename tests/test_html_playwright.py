@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from http.server import SimpleHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 import io
@@ -178,15 +179,11 @@ def test_embeddable_widget_renders_in_browser() -> None:
         browser.close()
 
 
-@pytest.fixture
-def marimo_url(tmp_path):
-    """Serve the marimo plots notebook with cells running on open, and yield its URL."""
-    pytest.importorskip('marimo')
-    notebook = tmp_path / 'plots.py'
-    notebook.write_text((Path(__file__).parent / '_marimo_plots.py').read_text())
-    (tmp_path / 'pyproject.toml').write_text('[tool.marimo.runtime]\nauto_instantiate = true\n')
+@contextlib.contextmanager
+def _serve_marimo(notebook, *args):
+    """Serve ``notebook`` with ``marimo <args>`` and yield its URL."""
     proc = subprocess.Popen(
-        [sys.executable, '-m', 'marimo', 'edit', '--headless', '--no-token', '-p', '0', notebook],
+        [sys.executable, '-m', 'marimo', *args, '--headless', notebook],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
@@ -211,6 +208,30 @@ def marimo_url(tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+@pytest.fixture
+def marimo_notebook(tmp_path):
+    """Write the marimo plots notebook with cells running on open, and return its path."""
+    pytest.importorskip('marimo')
+    notebook = tmp_path / 'plots.py'
+    notebook.write_text((Path(__file__).parent / '_marimo_plots.py').read_text())
+    (tmp_path / 'pyproject.toml').write_text('[tool.marimo.runtime]\nauto_instantiate = true\n')
+    return notebook
+
+
+@pytest.fixture
+def marimo_url(marimo_notebook):
+    """Serve the plots notebook with ``marimo edit`` and yield its URL."""
+    with _serve_marimo(marimo_notebook, 'edit', '--no-token') as url:
+        yield url
+
+
+@pytest.fixture
+def marimo_run_url(marimo_notebook):
+    """Serve the plots notebook with ``marimo run``, closing sessions 2 s after they disconnect."""
+    with _serve_marimo(marimo_notebook, 'run', '--session-ttl', '2') as url:
+        yield url
 
 
 def _drawn_plots(page) -> list[bool]:
@@ -422,3 +443,31 @@ def test_jupyter_app_renders_in_browser(served_plotter) -> None:
         browser.close()
 
     assert page_errors == []
+
+
+def _open_drawn_session(browser, url):
+    """Open ``url`` in a new browser context and assert all three plots draw."""
+    page = browser.new_context(viewport={'width': 1200, 'height': 1400}).new_page()
+    page.goto(url)
+    page.locator('iframe.pyvista').nth(2).wait_for(timeout=90000)
+    assert _drawn_plots(page) == [True, True, True]
+    return page
+
+
+@pytest.mark.needs_playwright
+def test_marimo_run_sessions_keep_their_plots(marimo_run_url) -> None:
+    """Open two ``marimo run`` sessions, close one, then reload the other and open a third."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        first = _open_drawn_session(browser, marimo_run_url)
+        second = _open_drawn_session(browser, marimo_run_url)
+        first.context.close()
+        second.wait_for_timeout(4000)
+
+        second.reload()
+        second.locator('iframe.pyvista').nth(2).wait_for(timeout=60000)
+        assert _drawn_plots(second) == [True, True, True]
+        _open_drawn_session(browser, marimo_run_url)
+        browser.close()
