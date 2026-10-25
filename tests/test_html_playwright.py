@@ -138,6 +138,89 @@ def test_embeddable_widget_renders_in_browser() -> None:
         browser.close()
 
 
+@pytest.fixture
+def marimo_url(tmp_path):
+    """Serve the marimo plots notebook with cells running on open, and yield its URL."""
+    pytest.importorskip('marimo')
+    notebook = tmp_path / 'plots.py'
+    notebook.write_text((Path(__file__).parent / '_marimo_plots.py').read_text())
+    (tmp_path / 'pyproject.toml').write_text('[tool.marimo.runtime]\nauto_instantiate = true\n')
+    proc = subprocess.Popen(
+        [sys.executable, '-m', 'marimo', 'edit', '--headless', '--no-token', '-p', '0', notebook],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=tmp_path,
+        env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
+    )
+    lines: list[str] = []
+    url = None
+    deadline = time.monotonic() + 90
+    try:
+        while time.monotonic() < deadline and proc.poll() is None:
+            line = proc.stdout.readline()
+            lines.append(line)
+            if 'URL:' in line:
+                url = line.split('URL:')[1].strip()
+                break
+        assert url is not None, ''.join(lines)
+        yield url
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
+def _drawn_plots(page) -> list[bool]:
+    """Return whether each pyvista iframe's canvas differs between its centre and corner."""
+    drawn = []
+    for iframe in page.locator('iframe.pyvista').all():
+        canvas = iframe.content_frame.locator('canvas').first
+        for _ in range(60):
+            pixels = _png_pixels(canvas.screenshot())
+            height, width = pixels.shape[:2]
+            if not np.array_equal(pixels[height // 2, width // 2], pixels[2, 2]):
+                drawn.append(True)
+                break
+            page.wait_for_timeout(250)
+        else:
+            drawn.append(False)
+    return drawn
+
+
+@pytest.mark.needs_playwright
+def test_marimo_plots_survive_cell_rerun_and_reload(marimo_url) -> None:
+    """Run the plots in marimo, re-run the first plot cell, then reload the page."""
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page(viewport={'width': 1200, 'height': 1400})
+        page.goto(marimo_url)
+        page.locator('iframe.pyvista').nth(2).wait_for(timeout=90000)
+        assert _drawn_plots(page) == [True, True, True]
+
+        first = page.locator('iframe.pyvista').first
+        before = first.evaluate('e => e.srcdoc')
+        page.locator('[data-testid=cell-editor]').nth(1).click()
+        page.keyboard.press('Shift+Enter')
+        for _ in range(240):
+            page.wait_for_timeout(250)
+            if first.evaluate('e => e.srcdoc') != before:
+                break
+        else:
+            pytest.fail('Re-running the cell did not replace its plot.')
+        assert _drawn_plots(page) == [True, True, True]
+
+        page.reload()
+        page.locator('iframe.pyvista').nth(2).wait_for(timeout=60000)
+        assert _drawn_plots(page) == [True, True, True]
+        browser.close()
+
+
 BASELINE_IMAGE_NAME = 'html_screenshot_baseline.png'
 SUBPLOTS_BASELINE_IMAGE_NAME = 'html_subplots_baseline.png'
 WINDOW_SIZE = (400, 300)
