@@ -409,6 +409,11 @@ def build_url(
         # server_proxy_prefix assumes trailing slash
         prefix = server_proxy_prefix or ''  # pragma: no cover
         src = f'{prefix}{_server.port}/index.html{params}'
+    elif 'google.colab' in sys.modules:
+        from google.colab.output import eval_js
+
+        base = eval_js(f'google.colab.kernel.proxyPort({_server.port})')
+        src = f'{base.rstrip("/")}/index.html{params}'
     else:
         src = f'{protocol}://{host}:{_server.port}/index.html{params}'
     logger.debug(src)
@@ -571,6 +576,7 @@ def show_trame(
         dh = f'{height}px'
     kwargs.setdefault('width', dw)
     kwargs.setdefault('height', dh)
+    url_kwargs = {key: kwargs.pop(key) for key in ('host', 'protocol') if key in kwargs}
 
     if mode == 'html':
         return EmbeddableWidget(plotter, **kwargs)
@@ -619,12 +625,12 @@ def show_trame(
             ui=plotter._id_name,
             server_proxy_enabled=server_proxy_enabled,
             server_proxy_prefix=server_proxy_prefix,
-            host=kwargs.get('host', 'localhost'),
-            protocol=kwargs.get('protocol', 'http'),
+            host=url_kwargs.get('host', 'localhost'),
+            protocol=url_kwargs.get('protocol', 'http'),
         )
 
     if callable(handler):
-        return handler(viewer, src, iframe_attrs=iframe_attrs, **kwargs)
+        return handler(viewer, src, iframe_attrs=iframe_attrs, **url_kwargs, **kwargs)
     return Widget(viewer, src, iframe_attrs=iframe_attrs, **kwargs)
 
 
