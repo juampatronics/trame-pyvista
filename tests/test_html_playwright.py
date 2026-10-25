@@ -150,7 +150,6 @@ def marimo_url(tmp_path):
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        cwd=tmp_path,
         env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
     )
     lines: list[str] = []
