@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 
+from anywidget import AnyWidget
 import comm
 from IPython.display import IFrame
 import numpy as np
@@ -17,6 +18,7 @@ from pyvista import examples
 from trame.app import get_server
 from trame_vtk.tools.vtksz2html import HTML_VIEWER_PATH
 
+from trame_pyvista.jupyter import _HTML_ONLY_KWARGS
 from trame_pyvista.jupyter import EmbeddableWidget
 from trame_pyvista.jupyter import TrameServerDownError
 from trame_pyvista.jupyter import Widget
@@ -641,18 +643,31 @@ def test_embeddable_widget_ignores_html_kwargs():
     assert isinstance(widget, EmbeddableWidget)
 
 
-def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
-    from trame_pyvista import jupyter
+def test_widget_is_anywidget():
+    widget = Widget(None, 'http://x', width='10px', height='20px')
+    assert isinstance(widget, AnyWidget)
+    assert widget.get_state()['value'] == widget.value
+    assert widget.value == (
+        '<iframe src="http://x" class="pyvista" '
+        'style="width: 10px; height: 20px; border: 1px solid rgb(221,221,221);" '
+        'scrolling="no"></iframe>'
+    )
 
-    monkeypatch.setattr(jupyter, 'HTML', object)
-    with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
-        jupyter.Widget(viewer=None, src=None)
+
+@pytest.mark.parametrize('key', _HTML_ONLY_KWARGS)
+def test_widget_ignores_html_kwargs(key):
+    with pytest.warns(UserWarning, match=rf'Ignoring `{key}`: no effect'):
+        widget = Widget(None, 'http://x', **{key: 'x'})
+    assert key not in widget.get_state()
 
 
 def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):
     from trame_pyvista import jupyter
 
     monkeypatch.setattr(jupyter, 'AnyWidget', object)
+    with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
+        jupyter.Widget(viewer=None, src=None)
+
     with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
         jupyter.EmbeddableWidget(plotter=None, width=None, height=None)
 
