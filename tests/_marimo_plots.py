@@ -1,9 +1,8 @@
 """Notebook with two html plots and one client plot, served by marimo in the browser tests."""
 
-from __future__ import annotations
-
 import marimo
 
+__generated_with = '0.25.2'
 app = marimo.App()
 
 
@@ -33,3 +32,7 @@ def _(pv):
     cone = pv.Plotter()
     cone.add_mesh(pv.Cone())
     cone.trame.show(mode='client', height='200px')
+
+
+if __name__ == '__main__':
+    app.run()

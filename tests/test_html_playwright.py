@@ -6,6 +6,8 @@ from http.server import ThreadingHTTPServer
 import io
 import os
 from pathlib import Path
+import queue
+import socket
 import subprocess
 import sys
 from threading import Thread
@@ -181,24 +183,39 @@ def test_embeddable_widget_renders_in_browser() -> None:
 
 @contextlib.contextmanager
 def _serve_marimo(notebook, *args):
-    """Serve ``notebook`` with ``marimo <args>`` and yield its URL."""
+    """Serve ``notebook`` with ``marimo <args>`` on a free port and yield its URL."""
+    with socket.socket() as sock:
+        sock.bind(('127.0.0.1', 0))
+        port = sock.getsockname()[1]
     proc = subprocess.Popen(
-        [sys.executable, '-m', 'marimo', *args, '--headless', notebook],
+        [sys.executable, '-m', 'marimo', *args, '--headless', '--port', str(port), notebook],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
     )
+    output: queue.Queue[str] = queue.Queue()
+
+    def drain():
+        """Forward every output line so the pipe never fills."""
+        for line in proc.stdout:
+            output.put(line)
+
+    Thread(target=drain, daemon=True).start()
     lines: list[str] = []
     url = None
     deadline = time.monotonic() + 90
     try:
-        while time.monotonic() < deadline and proc.poll() is None:
-            line = proc.stdout.readline()
+        while url is None and time.monotonic() < deadline:
+            try:
+                line = output.get(timeout=1)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    break
+                continue
             lines.append(line)
             if 'URL:' in line:
                 url = line.split('URL:')[1].strip()
-                break
         assert url is not None, ''.join(lines)
         yield url
     finally:

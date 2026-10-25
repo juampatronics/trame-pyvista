@@ -132,6 +132,28 @@ def test_launch_server_off_main_thread():
     assert result.returncode == 0, result.stderr
 
 
+def test_off_main_launches_share_one_loop_thread():
+    code = (
+        'import threading\n'
+        'from trame_pyvista.jupyter import elegantly_launch\n'
+        "for name in ('first', 'second'):\n"
+        '    thread = threading.Thread(target=elegantly_launch, args=(name,))\n'
+        '    thread.start()\n'
+        '    thread.join(60)\n'
+        "loops = [t for t in threading.enumerate() if t.name == 'trame-pyvista-server']\n"
+        'assert len(loops) == 1, loops\n'
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=90,
+        env={**os.environ, 'PYVISTA_OFF_SCREEN': 'true'},
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_launch_server_keeps_signal_handlers():
     code = (
         'import signal\n'
@@ -715,16 +737,22 @@ def test_marimo_app_gets_a_session_viewer_page():
 
     @app.cell
     def _():
+        import pyvista as pv
+
         from trame_pyvista import jupyter
 
         ctx = jupyter._marimo_context()
         page = jupyter._get_viewer_page()
-        return ctx, jupyter, page
+        pl = pv.Plotter()
+        pl.add_mesh(pv.Sphere())
+        widget = pl.trame.show(mode='html')
+        return ctx, jupyter, page, widget
 
     _, defs = app.run()
     assert defs['ctx'] is not None
     assert defs['page']._esm == ''
     assert defs['page'] is defs['jupyter']._session_viewer_pages[id(defs['ctx'])]
+    assert defs['widget']._viewer_page is defs['page']
 
 
 def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):

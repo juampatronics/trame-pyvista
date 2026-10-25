@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import marimo
 
 __generated_with = '0.25.2'
