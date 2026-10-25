@@ -216,9 +216,10 @@ def _marimo_context():
     """Return the marimo runtime context of the calling thread, if any."""
     if 'marimo' not in sys.modules:
         return None
+    # Private marimo API, guarded by test_marimo_app_gets_a_session_viewer_page
     try:
         from marimo._runtime.context import safe_get_context
-    except ImportError:  # pragma: no cover
+    except ImportError:
         return None
     return safe_get_context()
 

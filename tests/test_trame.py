@@ -703,8 +703,28 @@ def test_marimo_context_outside_marimo(monkeypatch: pytest.MonkeyPatch):
 
     pytest.importorskip('marimo')
     assert jupyter._marimo_context() is None
+    monkeypatch.setitem(sys.modules, 'marimo._runtime.context', None)
+    assert jupyter._marimo_context() is None
     monkeypatch.delitem(sys.modules, 'marimo')
     assert jupyter._marimo_context() is None
+
+
+def test_marimo_app_gets_a_session_viewer_page():
+    marimo = pytest.importorskip('marimo')
+    app = marimo.App()
+
+    @app.cell
+    def _():
+        from trame_pyvista import jupyter
+
+        ctx = jupyter._marimo_context()
+        page = jupyter._get_viewer_page()
+        return ctx, jupyter, page
+
+    _, defs = app.run()
+    assert defs['ctx'] is not None
+    assert defs['page']._esm == ''
+    assert defs['page'] is defs['jupyter']._session_viewer_pages[id(defs['ctx'])]
 
 
 def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):
