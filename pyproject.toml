@@ -39,16 +39,14 @@ readme = 'README.md'
 requires-python = '>=3.10'
 
 [project.optional-dependencies]
-anywidget = ['anywidget>=0.9']
 jupyter = [
   'anywidget>=0.9',
   'ipywidgets',
   'jupyter-server-proxy',
   'nest-asyncio2',
 ]
-marimo = ["marimo"]
+marimo = ['anywidget>=0.9', 'marimo']
 sphinx = ['docutils', 'sphinx']
-
 
 dev = [
   'mypy>=1.10',
@@ -69,6 +67,7 @@ test = [
   'anywidget>=0.9',
   'ipython',
   'ipywidgets',
+  'marimo',
   'nest-asyncio2',
   'numpy<2.5', # noisy shape deprecations until VTK 9.7
   'pytest-cov>=7.0',
@@ -94,7 +93,6 @@ Repository = 'https://github.com/pyvista/trame-pyvista'
 # names; at that point the alias will become redundant but remains
 # harmless.
 [project.entry-points.'pyvista.jupyter_backends']
-anywidget = 'trame_pyvista.anywidget:show_anywidget'
 client = 'trame_pyvista.jupyter:show_trame'
 html = 'trame_pyvista.jupyter:show_trame'
 server = 'trame_pyvista.jupyter:show_trame'
@@ -111,7 +109,7 @@ include = ['trame*', 'trame_pyvista*']
 where = ['.']
 
 [tool.setuptools.package-data]
-trame_pyvista = ['py.typed', 'static/*.js']
+trame_pyvista = ['py.typed']
 
 [tool.setuptools_scm]
 version_scheme = 'release-branch-semver'

@@ -9,10 +9,12 @@ import io
 import logging
 import os
 from pathlib import Path
+import sys
 import threading
 from typing import TYPE_CHECKING
 from typing import Concatenate
 from typing import Literal
+import weakref
 
 from pyvista._warn_external import warn_external
 from trame.widgets import html as html_widgets
@@ -21,11 +23,6 @@ from trame.widgets import vuetify as vuetify2_widgets
 from trame.widgets import vuetify3 as vuetify3_widgets
 from trame_vtk.tools.vtksz2html import HTML_VIEWER_PATH
 from trame_vtk.tools.vtksz2html import write_html
-
-try:
-    from ipywidgets.widgets import HTML
-except ImportError:
-    HTML = object
 
 try:
     from anywidget import AnyWidget
@@ -97,48 +94,16 @@ class TrameJupyterServerDownError(RuntimeError):
         super().__init__(JUPYTER_SERVER_DOWN_MESSAGE)
 
 
-class Widget(HTML):  # type: ignore[misc]  # numpydoc ignore=PR01
-    """Custom HTML iframe widget for trame viewer."""
-
-    def __init__(self, viewer, src, *, width=None, height=None, iframe_attrs=None, **kwargs):
-        """Initialize."""
-        if HTML is object:
-            msg = 'Please install `ipywidgets`.'
-            raise ImportError(msg)
-        # eventually we could maybe expose this, but for now make sure we're at least
-        # consistent with matplotlib's color (light gray)
-
-        if iframe_attrs is None:
-            iframe_attrs = {}
-
-        border = 'border: 1px solid rgb(221,221,221);'
-
-        iframe_attrs = {
-            **iframe_attrs,
-            'src': src,
-            'class': 'pyvista',
-            'style': f'width: {width}; height: {height}; {border}',
-            'scrolling': 'no',
-        }
-
-        iframe_attrs_str = ' '.join(f'{key}="{value!s}"' for key, value in iframe_attrs.items())
-
-        value = f'<iframe {iframe_attrs_str}></iframe>'
-
-        super().__init__(value, **kwargs)
-        self._viewer = viewer
-        self._src = src
-
-    @property
-    def viewer(self):  # numpydoc ignore=RT01
-        """Get the associated viewer instance."""
-        return self._viewer
-
-    @property
-    def src(self):  # numpydoc ignore=RT01
-        """Get the src URL."""
-        return self._src
-
+# JavaScript module (ESM) that anywidget runs in the browser to show the widget's HTML
+_HTML_ESM = """
+function render({ model, el }) {
+  const update = () => { el.innerHTML = model.get('value'); };
+  update();
+  model.on('change:value', update);
+  return () => model.off('change:value', update);
+}
+export default { render };
+"""
 
 # JavaScript module (ESM) that anywidget runs in the browser to draw each scene's iframe
 _SCENE_ESM = """
@@ -181,6 +146,60 @@ def _require_anywidget():
         raise ImportError(msg)
 
 
+def _pop_html_only_kwargs(kwargs):
+    """Remove the ``ipywidgets.HTML`` keyword arguments from ``kwargs`` with a warning."""
+    ignored = [key for key in _HTML_ONLY_KWARGS if kwargs.pop(key, None) is not None]
+    if ignored:
+        names = ', '.join(f'`{key}`' for key in ignored)
+        warn_external(f'Ignoring {names}: no effect on trame-pyvista notebook widgets.')
+
+
+class Widget(AnyWidget):  # type: ignore[misc]  # numpydoc ignore=PR01
+    """Custom HTML iframe widget for trame viewer."""
+
+    _esm = _HTML_ESM
+    if AnyWidget is not object:
+        value = traitlets.Unicode('').tag(sync=True)
+
+    def __init__(self, viewer, src, *, width=None, height=None, iframe_attrs=None, **kwargs):
+        """Initialize."""
+        _require_anywidget()
+        _pop_html_only_kwargs(kwargs)
+        # eventually we could maybe expose this, but for now make sure we're at least
+        # consistent with matplotlib's color (light gray)
+
+        if iframe_attrs is None:
+            iframe_attrs = {}
+
+        border = 'border: 1px solid rgb(221,221,221);'
+
+        iframe_attrs = {
+            **iframe_attrs,
+            'src': src,
+            'class': 'pyvista',
+            'style': f'width: {width}; height: {height}; {border}',
+            'scrolling': 'no',
+        }
+
+        iframe_attrs_str = ' '.join(f'{key}="{value!s}"' for key, value in iframe_attrs.items())
+
+        value = f'<iframe {iframe_attrs_str}></iframe>'
+
+        super().__init__(value=value, **kwargs)
+        self._viewer = viewer
+        self._src = src
+
+    @property
+    def viewer(self):  # numpydoc ignore=RT01
+        """Get the associated viewer instance."""
+        return self._viewer
+
+    @property
+    def src(self):  # numpydoc ignore=RT01
+        """Get the src URL."""
+        return self._src
+
+
 class _ViewerPage(AnyWidget):  # type: ignore[misc]  # numpydoc ignore=PR01
     """Hidden anywidget holding the trame-vtk viewer page that scene widgets share."""
 
@@ -189,7 +208,19 @@ class _ViewerPage(AnyWidget):  # type: ignore[misc]  # numpydoc ignore=PR01
 
 
 _shared_viewer_page: _ViewerPage | None = None
+_session_viewer_pages: dict[int, _ViewerPage] = {}
 _viewer_lock = threading.Lock()
+
+
+def _marimo_context():
+    """Return the marimo runtime context of the calling thread, if any."""
+    if 'marimo' not in sys.modules:
+        return None
+    try:
+        from marimo._runtime.context import safe_get_context
+    except ImportError:  # pragma: no cover
+        return None
+    return safe_get_context()
 
 
 def _is_closed(widget) -> bool:
@@ -197,14 +228,30 @@ def _is_closed(widget) -> bool:
     return widget.comm is None or getattr(widget.comm, '_closed', False)
 
 
+def _new_viewer_page(ctx) -> _ViewerPage:
+    """Create a viewer page, owned by no cell in a marimo session."""
+    html = Path(HTML_VIEWER_PATH).read_text(encoding='utf-8')
+    if ctx is None:
+        return _ViewerPage(html=html)
+    with ctx.with_cell_id(None):
+        return _ViewerPage(html=html, _esm='')
+
+
 def _get_viewer_page() -> _ViewerPage:
-    """Return the shared viewer page, creating it when missing or closed."""
+    """Return the viewer page of this kernel or marimo session, replacing a closed one."""
     global _shared_viewer_page
+    ctx = _marimo_context()
     with _viewer_lock:
-        if _shared_viewer_page is None or _is_closed(_shared_viewer_page):
-            html = Path(HTML_VIEWER_PATH).read_text(encoding='utf-8')
-            _shared_viewer_page = _ViewerPage(html=html)
-        return _shared_viewer_page
+        if ctx is None:
+            if _shared_viewer_page is None or _is_closed(_shared_viewer_page):
+                _shared_viewer_page = _new_viewer_page(None)
+            return _shared_viewer_page
+        key = id(ctx)
+        page = _session_viewer_pages.get(key)
+        if page is None or _is_closed(page):
+            page = _session_viewer_pages[key] = _new_viewer_page(ctx)
+            weakref.finalize(ctx, _session_viewer_pages.pop, key, None)
+        return page
 
 
 class EmbeddableWidget(AnyWidget):  # type: ignore[misc]  # numpydoc ignore=PR01
@@ -219,10 +266,7 @@ class EmbeddableWidget(AnyWidget):  # type: ignore[misc]  # numpydoc ignore=PR01
     def __init__(self, plotter, *, width, height, **kwargs):
         """Initialize."""
         _require_anywidget()
-        ignored = [key for key in _HTML_ONLY_KWARGS if kwargs.pop(key, None) is not None]
-        if ignored:
-            names = ', '.join(f'`{key}`' for key in ignored)
-            warn_external(f'Ignoring {names}: no effect on the html backend widget.')
+        _pop_html_only_kwargs(kwargs)
         data = plotter.trame.export_vtksz(filename=None)
         # eventually we could maybe expose this, but for now make sure we're at least
         # consistent with matplotlib's color (light gray)
@@ -504,11 +548,11 @@ def show_trame(
         Mostly ignored, though ``protocol`` and ``host`` can be use to
         override the iframe src url and ``height`` and ``width`` can be
         used to override the iframe style. Remaining kwargs are passed to
-        ``ipywidgets.widgets.HTML``, or ``anywidget.AnyWidget`` for the html backend.
+        ``anywidget.AnyWidget``.
 
     Returns
     -------
-    output : ipywidgets.widgets.HTML, anywidget.AnyWidget or handler result
+    output : anywidget.AnyWidget or handler result
         Returns a HTML IFrame widget or the result of the passed handler.
 
     """

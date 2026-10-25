@@ -179,30 +179,13 @@ class TrameComponent:
 
         Returns
         -------
-        ipywidgets.widgets.HTML | anywidget.AnyWidget | IPython.display.IFrame
+        anywidget.AnyWidget | IPython.display.IFrame
             The widget produced by the trame backend.
 
         """
         from trame_pyvista.jupyter import show_trame
 
         return show_trame(self._plotter, **kwargs)
-
-    def to_anywidget(self, **kwargs):
-        """Return an anywidget container widget rendering this plotter.
-
-        The scene is serialized with the vtk.js offline format and rendered
-        entirely client-side, so no trame server process is required to
-        display the widget.
-
-        Returns
-        -------
-        anywidget.AnyWidget
-            The widget instance; display it (e.g. as the last expression of
-            a Jupyter cell).
-        """
-        from trame_pyvista.anywidget import from_plotter
-
-        return from_plotter(self._plotter, **kwargs)
 
     def app(self, name=None):
         """Return a trame app for the plotter which can be display in Jupyter.

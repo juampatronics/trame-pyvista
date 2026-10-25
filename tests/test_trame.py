@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import gc
 import importlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 
+from anywidget import AnyWidget
 import comm
 from IPython.display import IFrame
 import numpy as np
@@ -641,18 +644,65 @@ def test_embeddable_widget_ignores_html_kwargs():
     assert isinstance(widget, EmbeddableWidget)
 
 
-def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
+def test_widget_is_anywidget():
+    with pytest.warns(UserWarning, match=r'Ignoring `style`: no effect'):
+        widget = Widget(None, 'http://x', width='10px', height='20px', style={'color': 'red'})
+    assert isinstance(widget, AnyWidget)
+    assert widget.get_state()['value'] == widget.value
+    assert widget.value.startswith('<iframe src="http://x" class="pyvista"')
+
+
+class _FakeMarimoContext:
+    """Stand-in marimo runtime context recording the cell ids of created widgets."""
+
+    def __init__(self):
+        self.cell_ids = []
+
+    @contextlib.contextmanager
+    def with_cell_id(self, cell_id):
+        """Record ``cell_id`` while the block runs."""
+        self.cell_ids.append(cell_id)
+        yield
+
+
+def test_marimo_sessions_get_their_own_viewer_page(monkeypatch: pytest.MonkeyPatch):
     from trame_pyvista import jupyter
 
-    monkeypatch.setattr(jupyter, 'HTML', object)
-    with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
-        jupyter.Widget(viewer=None, src=None)
+    first, second = _FakeMarimoContext(), _FakeMarimoContext()
+    monkeypatch.setattr(jupyter, '_marimo_context', lambda: first)
+    page = _show_html()._viewer_page
+    assert _show_html()._viewer_page is page
+    assert first.cell_ids == [None]
+    assert page._esm == ''
+    page.close()
+    replaced = _show_html()._viewer_page
+    assert replaced is not page
+    monkeypatch.setattr(jupyter, '_marimo_context', lambda ctx=second: ctx)
+    assert _show_html()._viewer_page not in (page, replaced)
+    monkeypatch.undo()
+    assert _show_html()._viewer_page not in (page, replaced)
+    key = id(second)
+    del second
+    gc.collect()
+    assert key not in jupyter._session_viewer_pages
+
+
+def test_marimo_context_outside_marimo(monkeypatch: pytest.MonkeyPatch):
+    from trame_pyvista import jupyter
+
+    pytest.importorskip('marimo')
+    assert jupyter._marimo_context() is None
+    monkeypatch.delitem(sys.modules, 'marimo')
+    assert jupyter._marimo_context() is None
 
 
 def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):
     from trame_pyvista import jupyter
 
     monkeypatch.setattr(jupyter, 'AnyWidget', object)
+    with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
+        jupyter.Widget(viewer=None, src=None)
+
     with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
         jupyter.EmbeddableWidget(plotter=None, width=None, height=None)
 
