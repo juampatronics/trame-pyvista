@@ -669,7 +669,8 @@ def elegantly_launch(*args, **kwargs):  # numpydoc ignore=PR01
 
     Warnings
     --------
-    On the main thread, this uses `nest_asyncio <https://github.com/erdewit/nest_asyncio>`_ which
+    On the main thread, this uses
+    `nest_asyncio2 <https://github.com/Chaoses-Ib/nest-asyncio2>`_ which
     patches the standard lib `asyncio` package and may have unintended
     consequences for some uses cases. We advise strongly to make sure PyVista's
     Jupyter backend is not set to use Trame when not in a Jupyter environment.
