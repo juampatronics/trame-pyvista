@@ -40,9 +40,11 @@ pip install "trame-pyvista[marimo]"
   with PyVista via the `pyvista.jupyter_backends` entry-point group, so
   `pv.set_jupyter_backend('trame')` works once `trame-pyvista` is
   installed.
-- **marimo**: every backend's widget is an [anywidget](https://anywidget.dev),
-  so the same plots also render in marimo notebooks, for example
-  `pl.trame.show(mode='html')`.
+- **marimo**: end a cell with `pl.trame.show(mode=...)` to render the
+  plot; `pl.show()` and `pv.set_jupyter_backend` do not render in marimo.
+  `mode='html'` works in any marimo session, while `trame`, `server` and
+  `client` need the browser on the machine running marimo. See
+  [examples/marimo/viewer.py](examples/marimo/viewer.py).
 - **Plotter views**: `PyVistaLocalView`, `PyVistaRemoteView`,
   `PyVistaRemoteLocalView` for embedding in trame apps.
 - **`plotter.trame` namespace**: registered as a PyVista plotter
