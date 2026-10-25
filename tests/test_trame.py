@@ -109,17 +109,17 @@ def test_launch_server_with_jupyter_kernel_argv():
 def test_launch_server_off_main_thread():
     # marimo run executes app cells in worker threads, where signal handlers cannot be installed.
     code = (
-        'import threading\n'
+        'import threading, urllib.request\n'
         'from trame.app import get_server\n'
         'from trame_pyvista.jupyter import elegantly_launch\n'
-        'ok = []\n'
         'def run():\n'
         "    elegantly_launch('off-main')\n"
-        "    ok.append(get_server(name='off-main').running)\n"
         'thread = threading.Thread(target=run)\n'
         'thread.start()\n'
         'thread.join(60)\n'
-        'assert ok == [True], ok\n'
+        "port = get_server(name='off-main').port\n"
+        "with urllib.request.urlopen(f'http://127.0.0.1:{port}/index.html', timeout=10) as r:\n"
+        '    assert r.status == 200\n'
     )
     result = subprocess.run(
         [sys.executable, '-c', code],
