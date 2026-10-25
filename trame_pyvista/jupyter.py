@@ -216,7 +216,10 @@ def _marimo_context():
     """Return the marimo runtime context of the calling thread, if any."""
     if 'marimo' not in sys.modules:
         return None
-    # Private marimo API, guarded by test_marimo_app_gets_a_session_viewer_page
+    # marimo has no public API for the calling session's context, which keys one viewer page
+    # per session and creates it outside any cell. If this import breaks we fall back to the
+    # Jupyter page: marimo then disposes it when the cell that made it reruns, and every
+    # session shares it, so other cells' and sessions' html plots go blank.
     try:
         from marimo._runtime.context import safe_get_context
     except ImportError:
