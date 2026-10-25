@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import os
 from pathlib import Path
 import subprocess
 import sys
 
+import comm
 from IPython.display import IFrame
 import numpy as np
 import pytest
@@ -585,6 +587,60 @@ def test_embeddable_widget():
     assert isinstance(widget, EmbeddableWidget)
 
 
+def _show_html(**kwargs):
+    """Return the html backend widget of a sphere plot."""
+    pl = pv.Plotter(notebook=True)
+    pl.add_mesh(pv.Sphere())
+    return pl.show(jupyter_backend='html', return_viewer=True, jupyter_kwargs=kwargs)
+
+
+def test_embeddable_widgets_share_viewer_page():
+    first, second = _show_html(), _show_html()
+    page = first._viewer_page
+    assert page is second._viewer_page
+    assert page.html == Path(HTML_VIEWER_PATH).read_text(encoding='utf-8')
+    assert base64.b64decode(first.scene)[:2] == b'PK'
+    assert first.get_state()['_viewer_page'] == f'IPY_MODEL_{page.model_id}'
+
+
+@pytest.mark.parametrize('close', ['widget', 'comm'])
+def test_embeddable_widget_replaces_closed_viewer_page(close):
+    old = _show_html()._viewer_page
+    if close == 'widget':
+        old.close()
+    else:
+        msg = {'content': {'comm_id': old.comm.comm_id, 'data': {}}}
+        comm.get_comm_manager().comm_close(None, None, msg)
+    first, second = _show_html(), _show_html()
+    assert first._viewer_page is not old
+    assert first._viewer_page is second._viewer_page
+
+
+def test_embeddable_widget_value():
+    pl = pv.Plotter(notebook=True)
+    pl.add_mesh(pv.Sphere())
+    widget = pl.show(jupyter_backend='html', return_viewer=True)
+    src = pl.trame.export_html(filename=None).getvalue()
+    exported_scene = src.split('const base64Str = "')[1].split('"')[0]
+    src = src.replace(exported_scene, widget.scene)
+    src = src.replace('&', '&amp;').replace('"', '&quot;')
+    border = 'border: 1px solid rgb(221,221,221);'
+    assert widget.value == (
+        f'<iframe srcdoc="{src}" class="pyvista" style="width: 100%; height: 600px; {border}">'
+        '</iframe>'
+    )
+
+
+def test_embeddable_widget_ignores_html_kwargs():
+    with pytest.warns(
+        UserWarning, match=r'Ignoring `style`, `description`, `description_tooltip`'
+    ):
+        widget = _show_html(
+            style={'background': 'red'}, description='sphere', description_tooltip='a'
+        )
+    assert isinstance(widget, EmbeddableWidget)
+
+
 def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
     from trame_pyvista import jupyter
 
@@ -592,7 +648,12 @@ def test_ipywidgets_raises(monkeypatch: pytest.MonkeyPatch):
     with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
         jupyter.Widget(viewer=None, src=None)
 
-    with pytest.raises(ImportError, match=r'Please install `ipywidgets`.'):
+
+def test_anywidget_raises(monkeypatch: pytest.MonkeyPatch):
+    from trame_pyvista import jupyter
+
+    monkeypatch.setattr(jupyter, 'AnyWidget', object)
+    with pytest.raises(ImportError, match=r'Please install `anywidget`.'):
         jupyter.EmbeddableWidget(plotter=None, width=None, height=None)
 
 
